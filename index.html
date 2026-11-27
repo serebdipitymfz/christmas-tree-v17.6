@@ -21964,7 +21964,7 @@
     else document.exitFullscreen();
   };
   function loadTextConfig() {
-    const s = JSON.parse(localStorage.getItem("v16_text_config"));
+    const s = JSON.parse(localStorage.getItem("v17_6_text_config"));
     if (s) {
       document.getElementById("input-line1").value = s.line1 || "";
       document.getElementById("input-line2").value = s.line2 || "";
@@ -21973,14 +21973,14 @@
       document.getElementById("color-picker").value = s.color || "#fceea7";
       applyTextConfig(s.fontKey, s.line1, s.line2, s.size, s.color);
     } else {
-      document.getElementById("input-line1").value = "Merry";
-      document.getElementById("input-line2").value = "Christmas";
-      applyTextConfig("style1", "Merry", "Christmas", 100, "#fceea7");
+      document.getElementById("input-line1").value = "JYY";
+      document.getElementById("input-line2").value = "\u5929\u5929\u5F00\u5FC3";
+      applyTextConfig("style1", "JYY", "\u5929\u5929\u5F00\u5FC3", 100, "#fceea7");
     }
   }
   window.updateTextConfig = () => {
     const k = document.getElementById("font-select").value, l1 = document.getElementById("input-line1").value, l2 = document.getElementById("input-line2").value, s = document.getElementById("slider-fontsize").value, c = document.getElementById("color-picker").value;
-    localStorage.setItem("v16_text_config", JSON.stringify({ fontKey: k, line1: l1, line2: l2, size: s, color: c }));
+    localStorage.setItem("v17_6_text_config", JSON.stringify({ fontKey: k, line1: l1, line2: l2, size: s, color: c }));
     applyTextConfig(k, l1, l2, s, c);
   };
   function applyTextConfig(k, l1, l2, s, c) {
