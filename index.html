@@ -21780,12 +21780,6 @@
   }
 
   // entry.mjs
-  var FilesetResolver = { forVisionTasks: async () => {
-    throw new Error("gestures disabled");
-  } };
-  var HandLandmarker = { createFromOptions: async () => {
-    throw new Error("gestures disabled");
-  } };
   var DB_NAME = "GrandTreeDB_v17_Clean";
   var EXPORTED_DATA = null;
   var CONFIG = {
@@ -21797,6 +21791,12 @@
   };
   var STATE = { mode: "TREE", focusTarget: null, focusType: 0, hand: { detected: false, x: 0, y: 0 }, rotation: { x: 0, y: 0 }, uiVisible: true, cameraVisible: true };
   var manualRotateState = { x: 0, y: 0 };
+  var GESTURE = { name: "NONE", frames: 0, lastSwitch: 0, lastAngle: null };
+  var TRANSITION = { morph: 0, target: 0 };
+  var CAM_ORBIT = { yaw: 0, pitch: 0, radius: CONFIG.camera.z, targetYaw: 0, targetPitch: 0 };
+  var _tmpTarget = new Vector3();
+  var _tmpOrbit = new Vector3();
+  var _tmpScale = new Vector3();
   var FONT_STYLES = { "style1": { font: "'Ma Shan Zheng','STKaiti','KaiTi','\u6977\u4F53',cursive", spacing: "4px", shadow: "2px 2px 8px rgba(180,50,50,0.8)", transform: "none" }, "style2": { font: "'Cinzel','Times New Roman','Songti SC','SimSun',serif", spacing: "6px", shadow: "0 0 20px rgba(255,215,0,0.5)", transform: "none" }, "style3": { font: "'Great Vibes','Snell Roundhand','STKaiti','KaiTi',cursive", spacing: "1px", shadow: "0 0 15px rgba(255,200,255,0.7)", transform: "none" }, "style4": { font: "'Monoton','Arial Rounded MT Bold','STHeiti',cursive", spacing: "1px", shadow: "0 0 10px #fff", transform: "none" }, "style5": { font: "'Abril Fatface','Georgia','STSong','SimSun',serif", spacing: "0px", shadow: "0 5px 15px rgba(0,0,0,0.8)", transform: "none" } };
   var db;
   function initDB() {
@@ -22034,16 +22034,21 @@
     const modeName = STATE.mode === "TREE" ? "\u805A\u5408 (\u5723\u8BDE\u6811)" : STATE.mode === "SCATTER" ? "\u6563\u5F00 (\u661F\u4E91)" : "\u6293\u53D6\u7167\u7247";
     const tip = typeof IS_MOBILE !== "undefined" && IS_MOBILE ? " \xB7 \u62D6\u52A8\u65CB\u8F6C / \u53CC\u6307\u7F29\u653E" : "";
     const cam = typeof camHint === "function" ? camHint() : "";
-    const text = "\u72B6\u6001: " + modeName + tip + cam;
+    const g = GESTURE.name && GESTURE.name !== "NONE" ? " \xB7 \u624B\u52BF: " + GESTURE.name : "";
+    const text = "\u72B6\u6001: " + modeName + tip + g + cam;
     if (hint.innerText !== text) hint.innerText = text;
   }
   window.setMode = function(mode) {
-    STATE.mode = mode;
+    if (STATE.mode !== mode) {
+      STATE.mode = mode;
+      TRANSITION.target = mode === "TREE" ? 0 : 1;
+      GESTURE.lastSwitch = performance.now();
+    }
     STATE.focusTarget = null;
     refreshHint();
   };
   window.triggerPhotoGrab = () => {
-    let cp = null, md = Infinity;
+    let cp = null, md = Infinity, nearest = null, nd = Infinity;
     STATE.focusType = Math.floor(Math.random() * 4);
     particleSystem.filter((p) => p.type === "PHOTO").forEach((p) => {
       p.mesh.updateMatrixWorld();
@@ -22051,13 +22056,18 @@
       p.mesh.getWorldPosition(pos);
       const sp = pos.project(camera);
       const d = Math.hypot(sp.x, sp.y);
-      if (sp.z < 1 && d < CONFIG.interaction.grabRadius) {
-        if (d < md) {
+      if (sp.z < 1) {
+        if (d < nd) {
+          nd = d;
+          nearest = p.mesh;
+        }
+        if (d < CONFIG.interaction.grabRadius && d < md) {
           md = d;
           cp = p.mesh;
         }
       }
     });
+    if (!cp) cp = nearest;
     if (cp) {
       setMode("FOCUS");
       STATE.focusTarget = cp;
@@ -22076,6 +22086,8 @@
   };
   window.resetRotation = () => {
     STATE.rotation = { x: 0, y: 0 };
+    CAM_ORBIT.targetYaw = 0;
+    CAM_ORBIT.targetPitch = 0;
     if (STATE.mode !== "TREE") setMode("TREE");
   };
   window.setupEvents = function() {
@@ -22227,7 +22239,7 @@
       snowDummy.scale.set(s, s, s);
       snowDummy.updateMatrix();
       snowInstancedMesh.setMatrixAt(i, snowDummy.matrix);
-      snowData.push({ vy: Math.random() * 0.5 + 0.8, rx: (Math.random() - 0.5) * 2, ry: (Math.random() - 0.5) * 2, rz: (Math.random() - 0.5) * 2 });
+      snowData.push({ s, vy: Math.random() * 0.5 + 0.8, rx: (Math.random() - 0.5) * 2, ry: (Math.random() - 0.5) * 2, rz: (Math.random() - 0.5) * 2 });
     }
     scene.add(snowInstancedMesh);
   }
@@ -22257,30 +22269,30 @@
       this.posScatter.set(rs * Math.sin(ph) * Math.cos(th), rs * Math.sin(ph) * Math.sin(th), rs * Math.cos(ph));
     }
     update(dt, mode, ft) {
-      let tg = this.posTree;
-      if (mode === "SCATTER") tg = this.posScatter;
-      else if (mode === "FOCUS") {
-        if (this.mesh === ft) {
-          let off = new Vector3(0, 1, 38);
-          if (STATE.focusType === 1) off.set(-4, 2, 35);
-          else if (STATE.focusType === 2) off.set(3, 0, 32);
-          else if (STATE.focusType === 3) off.set(0, -2.5, 30);
-          const im = new Matrix4().copy(mainGroup.matrixWorld).invert();
-          tg = off.applyMatrix4(im);
-        } else tg = this.posScatter;
-      }
-      const ls = mode === "FOCUS" && this.mesh === ft ? 8 : 4;
-      this.mesh.position.lerp(tg, ls * dt);
-      if (mode === "SCATTER") {
-        this.mesh.rotation.x += this.spinSpeed.x * dt;
-        this.mesh.rotation.y += this.spinSpeed.y * dt;
-        this.mesh.rotation.z += this.spinSpeed.z * dt;
-      } else if (mode === "TREE") {
-        this.mesh.rotation.x = MathUtils.lerp(this.mesh.rotation.x, 0, dt);
-        this.mesh.rotation.z = MathUtils.lerp(this.mesh.rotation.z, 0, dt);
-        this.mesh.rotation.y += 0.5 * dt;
-      }
+      const m = TRANSITION.morph;
+      let tg;
       if (mode === "FOCUS" && this.mesh === ft) {
+        let off = new Vector3(0, 1, 38);
+        if (STATE.focusType === 1) off.set(-4, 2, 35);
+        else if (STATE.focusType === 2) off.set(3, 0, 32);
+        else if (STATE.focusType === 3) off.set(0, -2.5, 30);
+        const im = new Matrix4().copy(mainGroup.matrixWorld).invert();
+        tg = off.applyMatrix4(im);
+      } else {
+        tg = _tmpTarget.copy(this.posTree).lerp(this.posScatter, m);
+      }
+      const focused = mode === "FOCUS" && this.mesh === ft;
+      const ls = focused ? 8 : 3 + 3 * m;
+      this.mesh.position.lerp(tg, ls * dt);
+      const spin = m * dt;
+      this.mesh.rotation.x += this.spinSpeed.x * spin;
+      this.mesh.rotation.y += this.spinSpeed.y * spin;
+      this.mesh.rotation.z += this.spinSpeed.z * spin;
+      const align = (1 - m) * 2.5 * dt;
+      this.mesh.rotation.x = MathUtils.lerp(this.mesh.rotation.x, 0, align);
+      this.mesh.rotation.z = MathUtils.lerp(this.mesh.rotation.z, 0, align);
+      this.mesh.rotation.y += 0.5 * (1 - m) * dt;
+      if (focused) {
         this.mesh.lookAt(camera.position);
         if (STATE.focusType === 1) this.mesh.rotateZ(0.38);
         if (STATE.focusType === 2) this.mesh.rotateZ(-0.15);
@@ -22288,17 +22300,15 @@
       }
       let s = this.baseScale;
       if (this.isDust) {
-        s = this.baseScale * (0.8 + 0.4 * Math.sin(clock.elapsedTime * 4 + this.mesh.id));
-        if (mode === "TREE") s = 0;
-      } else if (mode === "SCATTER" && this.type === "PHOTO") s = this.baseScale * 2.5;
-      else if (mode === "FOCUS") {
-        if (this.mesh === ft) {
-          if (STATE.focusType === 2) s = 3.5;
-          else if (STATE.focusType === 3) s = 4.8;
-          else s = 3;
-        } else s = this.baseScale * 0.8;
+        s = this.baseScale * (0.8 + 0.4 * Math.sin(clock.elapsedTime * 4 + this.mesh.id)) * m;
+      } else if (focused) {
+        s = STATE.focusType === 2 ? 3.5 : STATE.focusType === 3 ? 4.8 : 3;
+      } else if (mode === "FOCUS") {
+        s = this.baseScale * 0.8;
+      } else {
+        s = this.baseScale * (1 + 1.5 * m * (this.type === "PHOTO" ? 1 : 0));
       }
-      this.mesh.scale.lerp(new Vector3(s, s, s), 6 * dt);
+      this.mesh.scale.lerp(_tmpScale.set(s, s, s), (focused ? 6 : 4) * dt);
     }
   };
   function createParticles() {
@@ -22543,6 +22553,16 @@
       camStarting = false;
     }
   }
+  function loadMediaPipeScript() {
+    if (window.FilesetResolver && window.HandLandmarker) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = new URL("./mediapipe/mp-loader.js", location.href).href;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error("mp loader failed"));
+      document.head.appendChild(s);
+    });
+  }
   async function initMediaPipe() {
     const isWeChat = /MicroMessenger/i.test(navigator.userAgent || "");
     if (isWeChat || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -22551,8 +22571,10 @@
     }
     await startCamera();
     try {
-      const v = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
-      const opts = (delegate) => ({ baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task", delegate }, runningMode: "VIDEO", numHands: 1 });
+      await loadMediaPipeScript();
+      const FilesetResolver = window.FilesetResolver, HandLandmarker = window.HandLandmarker;
+      const v = await FilesetResolver.forVisionTasks(new URL("./mediapipe/", location.href).href);
+      const opts = (delegate) => ({ baseOptions: { modelAssetPath: new URL("./mediapipe/hand_landmarker.task", location.href).href, delegate }, runningMode: "VIDEO", numHands: 1 });
       try {
         handLandmarker = await HandLandmarker.createFromOptions(v, opts("GPU"));
       } catch (errGPU) {
@@ -22607,24 +22629,79 @@
     }
     requestAnimationFrame(predictWebcam);
   }
-  function processGestures(r) {
-    if (r.landmarks && r.landmarks.length > 0) {
-      STATE.hand.detected = true;
-      const lm = r.landmarks[0];
-      STATE.hand.x = (lm[9].x - 0.5) * 2;
-      STATE.hand.y = (lm[9].y - 0.5) * 2;
-      const thumb = lm[4], index = lm[8], wrist = lm[0], middle = lm[12];
-      const pd = Math.hypot(thumb.x - index.x, thumb.y - index.y);
-      const od = Math.hypot(middle.x - wrist.x, middle.y - wrist.y);
-      if (STATE.mode === "FOCUS") {
-        if (pd > 0.1) setMode("SCATTER");
-        return;
-      }
-      if (pd < 0.05 && STATE.mode !== "FOCUS") triggerPhotoGrab();
-      else if (od > 0.4) setMode("SCATTER");
-      else if (od < 0.2) setMode("TREE");
-    } else STATE.hand.detected = false;
+  function _dist2(a, b) {
+    return Math.hypot(a.x - b.x, a.y - b.y);
   }
+  function classifyGesture(lm) {
+    if (!lm || lm.length < 21) return "NONE";
+    const palm = Math.max(0.05, _dist2(lm[0], lm[9]));
+    const straight = [];
+    [[5, 6, 8], [9, 10, 12], [13, 14, 16], [17, 18, 20]].forEach(([mi, pi, ti]) => {
+      const v1 = { x: lm[mi].x - lm[pi].x, y: lm[mi].y - lm[pi].y };
+      const v2 = { x: lm[ti].x - lm[pi].x, y: lm[ti].y - lm[pi].y };
+      const cos = (v1.x * v2.x + v1.y * v2.y) / (Math.hypot(v1.x, v1.y) * Math.hypot(v2.x, v2.y) || 1);
+      const ang = Math.acos(Math.max(-1, Math.min(1, cos))) * 180 / Math.PI;
+      straight.push(ang > 145);
+    });
+    straight.push(_dist2(lm[4], lm[17]) > _dist2(lm[2], lm[17]) * 1.1);
+    const n = straight.filter(Boolean).length;
+    const pinch = _dist2(lm[4], lm[8]) / palm;
+    if (pinch < 0.45 && n >= 2 && n <= 4) return "GRAB";
+    if (n <= 1) return "FIST";
+    if (n >= 4) return "OPEN";
+    return "NONE";
+  }
+  function gestureRotation(lm) {
+    const cx = (lm[0].x + lm[5].x + lm[9].x + lm[13].x + lm[17].x) / 5;
+    const cy = (lm[0].y + lm[5].y + lm[9].y + lm[13].y + lm[17].y) / 5;
+    const ang = Math.atan2(lm[17].y - lm[5].y, lm[17].x - lm[5].x);
+    const prev = GESTURE.lastAngle;
+    GESTURE.lastAngle = { x: cx, y: cy, ang };
+    if (!prev) return { dx: 0, dy: 0, da: 0 };
+    let da = ang - prev.ang;
+    while (da > Math.PI) da -= Math.PI * 2;
+    while (da < -Math.PI) da += Math.PI * 2;
+    return { dx: cx - prev.x, dy: cy - prev.y, da: -da };
+  }
+  function processGestures(r) {
+    if (!r || !r.landmarks || r.landmarks.length === 0) {
+      STATE.hand.detected = false;
+      GESTURE.frames = 0;
+      GESTURE.name = "NONE";
+      GESTURE.lastAngle = null;
+      return;
+    }
+    STATE.hand.detected = true;
+    const lm = r.landmarks[0];
+    STATE.hand.x = (lm[9].x - 0.5) * 2;
+    STATE.hand.y = (lm[9].y - 0.5) * 2;
+    const g = classifyGesture(lm);
+    const rot = gestureRotation(lm);
+    if (g === GESTURE.name) GESTURE.frames++;
+    else {
+      GESTURE.name = g;
+      GESTURE.frames = 1;
+    }
+    const now2 = performance.now();
+    const need = g === "GRAB" ? 3 : 4;
+    if (GESTURE.frames >= need && now2 - GESTURE.lastSwitch > 650) {
+      if (g === "FIST" && STATE.mode !== "TREE") {
+        setMode("TREE");
+        GESTURE.lastSwitch = now2;
+      } else if (g === "OPEN" && STATE.mode !== "SCATTER") {
+        setMode("SCATTER");
+        GESTURE.lastSwitch = now2;
+      } else if (g === "GRAB") {
+        triggerPhotoGrab();
+        GESTURE.lastSwitch = now2;
+      }
+    }
+    if (STATE.mode === "SCATTER" && g !== "FIST") {
+      CAM_ORBIT.targetYaw += rot.da * 2.6 + rot.dx * 1.8;
+      CAM_ORBIT.targetPitch = Math.max(-0.55, Math.min(0.65, CAM_ORBIT.targetPitch - rot.dy * 1.4));
+    }
+  }
+  window.__gesture = { classify: classifyGesture, process: processGestures, state: GESTURE, transition: TRANSITION, orbit: CAM_ORBIT, setMode: window.setMode, getMode: () => STATE.mode };
   window.setupEvents = () => {
     window.addEventListener("resize", () => {
       camera.aspect = window.innerWidth / window.innerHeight;
@@ -22726,8 +22803,10 @@
     requestAnimationFrame(animate);
     const dt = Math.min(clock.getDelta(), 0.05);
     const et = clock.getElapsedTime();
-    if (snowInstancedMesh && STATE.mode === "TREE") {
+    TRANSITION.morph += (TRANSITION.target - TRANSITION.morph) * (1 - Math.exp(-2.6 * dt));
+    if (snowInstancedMesh && TRANSITION.morph < 0.98) {
       snowInstancedMesh.visible = true;
+      const snowFade = Math.max(0, 1 - TRANSITION.morph * 1.15);
       for (let i = 0; i < CONFIG.snow.count; i++) {
         snowInstancedMesh.getMatrixAt(i, snowDummy.matrix);
         snowDummy.matrix.decompose(snowDummy.position, snowDummy.quaternion, snowDummy.scale);
@@ -22738,6 +22817,7 @@
         snowDummy.rotation.x += d.rx * dt;
         snowDummy.rotation.y += d.ry * dt;
         snowDummy.rotation.z += d.rz * dt;
+        snowDummy.scale.setScalar((d.s || 1) * snowFade);
         if (snowDummy.position.y < -25) {
           snowDummy.position.y = 40;
           snowDummy.position.x = (Math.random() - 0.5) * CONFIG.snow.range;
@@ -22766,6 +22846,17 @@
     }
     mainGroup.rotation.y = STATE.rotation.y;
     mainGroup.rotation.x = STATE.rotation.x;
+    const ck = 1 - Math.exp(-3.2 * dt);
+    CAM_ORBIT.yaw += (CAM_ORBIT.targetYaw - CAM_ORBIT.yaw) * ck;
+    CAM_ORBIT.pitch += (CAM_ORBIT.targetPitch - CAM_ORBIT.pitch) * ck;
+    const rr = CAM_ORBIT.radius;
+    _tmpOrbit.set(
+      Math.sin(CAM_ORBIT.yaw) * Math.cos(CAM_ORBIT.pitch) * rr,
+      2 + Math.sin(CAM_ORBIT.pitch) * rr,
+      Math.cos(CAM_ORBIT.yaw) * Math.cos(CAM_ORBIT.pitch) * rr
+    );
+    camera.position.lerp(_tmpOrbit, ck);
+    camera.lookAt(0, 2, 0);
     particleSystem.forEach((p) => p.update(dt, STATE.mode, STATE.focusTarget));
     composer.render();
   }
@@ -22858,7 +22949,7 @@
         } else if (ptrs.size === 2) {
           const a = [...ptrs.values()];
           const d = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
-          if (pinch && camera) camera.position.z = Math.max(26, Math.min(88, camera.position.z - (d - pinch) * 0.22));
+          if (pinch && camera) CAM_ORBIT.radius = Math.max(26, Math.min(88, CAM_ORBIT.radius - (d - pinch) * 0.22));
           pinch = d;
         }
       }, { passive: true });
